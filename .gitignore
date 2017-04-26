@@ -1,0 +1,7 @@
+*.pyc
+*.pyo
+*.egg
+.coverage
+sodium11.egg-info/
+build/
+dist/
