@@ -67,7 +67,7 @@ class suppress_stdout_stderr(object):
 #     except ImportError:
 #         HAS_PYECLIB = False
 
-__version__ = "0.8.5"
+__version__ = "0.9.1"
 
 MAX_INT64 = 0xFFFFFFFFFFFFFFFF
 MAX_INT128 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
