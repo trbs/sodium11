@@ -5,3 +5,4 @@
 sodium11.egg-info/
 build/
 dist/
+tmp/
