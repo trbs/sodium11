@@ -60,14 +60,12 @@ class suppress_stdout_stderr(object):
         os.close(self.null_fds[1])
 
 
-# with stderr_redirected():
-# if 1:
-with suppress_stdout_stderr():
-    try:
-        from pyeclib.ec_iface import ECDriver
-        HAS_PYECLIB = True
-    except ImportError:
-        HAS_PYECLIB = False
+# with suppress_stdout_stderr():
+#     try:
+#         from pyeclib.ec_iface import ECDriver
+#         HAS_PYECLIB = True
+#     except ImportError:
+#         HAS_PYECLIB = False
 
 __version__ = "0.8.3"
 
@@ -198,6 +196,12 @@ def dummy_for_writing(*args, **kwargs):
 
 
 def shorten_filename(filename):
+    """
+    Shortens a filename
+
+    >>> shorten_filename("verylongfilename.txt")
+    'ver~longfilename.txt'
+    """
     f = os.path.split(filename)[1]
     return "%s~%s" % (f[:3], f[-16:]) if len(f) > 19 else f
 

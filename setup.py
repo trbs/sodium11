@@ -1,18 +1,17 @@
 import os
 import sys
 from setuptools import setup
-from sodium11 import __version__
-from ctypes.util import find_library
+# from ctypes.util import find_library
 
-if not find_library("erasurecode"):
-    print("Missing 'liberasurecode' please install with:")
-    print("\tDebian/Ubuntu: apt-get install liberasurecode-dev")
-    print("\tMac: brew install liberasurecode")
-    sys.exit(os.EX_USAGE)
+# if not find_library("erasurecode"):
+#     print("Missing 'liberasurecode' please install with:")
+#     print("\tDebian/Ubuntu: apt-get install liberasurecode-dev")
+#     print("\tMac: brew install liberasurecode")
+#     sys.exit(os.EX_USAGE)
 
 setup(
     name="sodium11",
-    version=__version__,
+    version="0.8.4",
     py_modules=['sodium11'],
     install_requires=[
         "PyNaCl>=1.1.2",
