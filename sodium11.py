@@ -167,6 +167,60 @@ class ChaCha20Blake2bHMAC(object):
         return nacl.bindings.sodium_memcmp(bytes(self.hexdigest()), bytes(hexdigest))
 
 
+class ChecksumHashes(object):
+    def __init__(self, hash_types, filename):
+        self._hash_types = hash_types
+        self._filename = filename
+        self._hshs = [HASH_TYPES[e]() for e in self._hash_types]
+        self._compare_digests = ["" for e in self._hash_types]
+
+    def store_and_reset(self):
+        self._compare_digests = [e.digest() for e in self._hshs]
+        self._hshs = [HASH_TYPES[e]() for e in self._hash_types]
+
+    def compare(self):
+        digests = [e.digest() for e in self._hshs]
+        if len(digests) != len(self._compare_digests):
+            return False
+        for a, b in zip(digests, self._compare_digests):
+            if a != b:
+                return False
+        return True
+
+    def update(self, block):
+        for hsh in self._hshs:
+            hsh.update(block)
+
+    def digest(self):
+        return [(name, hsh.digest()) for name, hsh in zip(self._hash_types, self._hshs)]
+
+    def hexdigest(self):
+        return [(name, hsh.hexdigest()) for name, hsh in zip(self._hash_types, self._hshs)]
+
+    def lines(self):
+        lines = ""
+        for name, hexdigest in self.hexdigest():
+            lines += "%s=%s  %s\n" % (name, hexdigest, self._filename)
+        return lines
+
+    def _get_persist_filename(self, filename, add_postfix=True):
+        if add_postfix and not filename.endswith(".s1x"):
+            filename = filename + ".s1x"
+
+        return filename
+
+    def persist(self, filename, add_postfix=True):
+        filename = self._get_persist_filename(filename, add_postfix=add_postfix)
+        with open_for_writing(filename) as wf:
+            wf.write("# Sodium11 File Hashes\n")
+            wf.write(self.lines())
+
+    def test_persistfile_exists(self, filename, add_postfix=True):
+        filename = self._get_persist_filename(filename, add_postfix=add_postfix)
+        if os.path.isfile(filename):
+            raise click.UsageError("File '%s' already exists" % filename)
+
+
 def dummy_tqdm(*args, **kwargs):
     class DummyTqdm(object):
         def __enter__(self):
@@ -577,25 +631,19 @@ def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, p
     progress_indicator = tqdm if progress else dummy_tqdm
 
     for f in filename:
-        hshs = [HASH_TYPES[e]() for e in hash_type]
+        ch = ChecksumHashes(hash_types=hash_type, filename=f.name)
         with progress_indicator(total=os.path.getsize(f.name), unit="B", unit_scale=True, desc=shorten_filename(f.name), leave=leave_progress_bar) as pbar:
             while True:
                 block = f.read(BUFSIZE)
                 if not block:
                     break
-                for hsh in hshs:
-                    hsh.update(block)
+                ch.update(block)
                 pbar.update(len(block))
-        lines = ""
-        for name, hsh in zip(hash_type, hshs):
-            lines += "%s=%s  %s\n" % (name, hsh.hexdigest(), f.name)
 
         if persist:
-            with open_for_writing(f.name + ".s1x") as wf:
-                wf.write("# Sodium11 File Hashes\n")
-                wf.write(lines)
+            ch.persist(f.name, add_postfix=True)
         else:
-            output_file.write(lines)
+            output_file.write(ch.lines())
             output_file.flush()
         f.close()
 
@@ -613,8 +661,10 @@ def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, p
 @click.option('--leave-progress-bar', default=False, is_flag=True, help="Leave progress bar on terminal")
 @click.option('--cipher-type', '-c', default="ChaCha20Blake2b", type=click.Choice(CIPHER_TYPES.keys()), help="Type of cipher to use. (Default is ChaCha20Blake2b)")
 @click.option('--sender-passphrase', envvar='SODIUM11_SENDER_PASSPHRASE', default=None, help="Sender private key passphrase")
+@click.option('--hash-type', '-t', type=click.Choice(HASH_TYPES.keys()), multiple=True, help="Type of hash algoritm(es) to use. Can be specified multiple times. (Default is SHA1)")
+@click.option('--checksum/--no-checksum', default=False, help='Include generating (unencrypted) checksum of the source file')
 @click.pass_context
-def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sender_pubkey, verify, keep, progress, sender_key_file, leave_progress_bar, cipher_type, sender_passphrase):
+def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sender_pubkey, verify, keep, progress, sender_key_file, leave_progress_bar, cipher_type, sender_passphrase, hash_type, checksum):
     """Encrypt file(s) with public key."""
 
     if verify and not os.path.isfile(key_file):
@@ -628,6 +678,9 @@ def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sen
 
     if cipher_type not in CIPHER_TYPES:
         raise click.UsageError("Cipher type '%s' does not exist" % cipher_type)
+
+    if not hash_type:
+        hash_type = ('SHA1', )
 
     if progress is None:
         progress = sys.stdout.isatty()
@@ -644,6 +697,10 @@ def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sen
 
     for f in filename:
         flags = 0  # integer used for specifying flags in file header
+
+        if checksum:
+            ch = ChecksumHashes(hash_types=hash_type, filename=f.name)
+            ch.test_persistfile_exists(f.name)
 
         s_prv = _s_prv if _s_prv else nacl.signing.SigningKey.generate()
         s_pub = s_prv.verify_key
@@ -672,10 +729,14 @@ def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sen
                         break
                     block_size = len(block)
                     file_size += block_size
+                    if checksum:
+                        ch.update(block)
                     encrypted_block = aead_cipher.encrypt(block)
                     encrypted_file_size += len(encrypted_block)
                     wf.write(encrypted_block)
                     pbar.update(block_size)
+                if checksum:
+                    ch.persist(f.name)
 
             cipher_digest = aead_cipher.digest()
             version_and_flags = struct.pack(">II", flags, Version100.version)
@@ -717,6 +778,9 @@ def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sen
             if sender_key_file:
                 sender_pubkey = load_public_keyfile(sender_key_file + ".pub")
 
+            if checksum:
+                ch.store_and_reset()
+
             with open(output_filename, "r") as encrypted_fh:
                 _decrypt(
                     f=encrypted_fh,
@@ -726,6 +790,7 @@ def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sen
                     progress=progress,
                     leave_progress_bar=leave_progress_bar,
                     output_filename=None,
+                    ch=ch if checksum else None,
                 )
 
         if not keep:
@@ -773,7 +838,7 @@ def cli_decrypt(ctx, filename, key_file, passphrase, public_keyfile, verify, kee
             os.unlink(fh.name)
 
 
-def _decrypt(f, ed_prv, sender_pubkey, verify, progress, leave_progress_bar, output_filename):
+def _decrypt(f, ed_prv, sender_pubkey, verify, progress, leave_progress_bar, output_filename, ch=None):
     progress_indicator = tqdm if progress else dummy_tqdm
     filesize = os.path.getsize(f.name)
 
@@ -850,11 +915,16 @@ def _decrypt(f, ed_prv, sender_pubkey, verify, progress, leave_progress_bar, out
                     break
                 block_size = len(block)
                 plain_block = aead_cipher.decrypt(block)
+                if ch:
+                    ch.update(plain_block)
                 pf.write(plain_block)
                 pbar.update(block_size)
 
         if cipher_digest != aead_cipher.digest():
-            raise click.UsageError("File '%s' failed checksum '%s' != '%s'" % (f.name, cipher_digest, aead_cipher.digest()))
+            raise click.UsageError("File '%s' failed cipher checksum '%s' != '%s'" % (f.name, cipher_digest, aead_cipher.digest()))
+
+        if not ch.compare():
+            raise click.UsageError("File '%s' failed checksum")
 
 
 # @cli.command(name='encode-rs')
