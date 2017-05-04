@@ -11,7 +11,7 @@ from setuptools import setup
 
 setup(
     name="sodium11",
-    version="0.9.1",
+    version="0.9.2",
     py_modules=['sodium11'],
     install_requires=[
         "PyNaCl>=1.1.2",

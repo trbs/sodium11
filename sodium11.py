@@ -11,6 +11,7 @@ import hashlib
 import stat
 import click
 import platform
+import subprocess
 import nacl.utils
 import nacl.public
 import nacl.pwhash
@@ -67,7 +68,7 @@ class suppress_stdout_stderr(object):
 #     except ImportError:
 #         HAS_PYECLIB = False
 
-__version__ = "0.9.1"
+__version__ = "0.9.2"
 
 MAX_INT64 = 0xFFFFFFFFFFFFFFFF
 MAX_INT128 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
@@ -77,6 +78,7 @@ DEFAULT_KEYPATH = os.path.join(CONFIG_DIRECTORY, "id_ed25519")
 DEFAULT_KEYPATH_PUB = DEFAULT_KEYPATH + ".pub"
 BUFSIZE = 1024 * 1024
 SODIUM11_HEADER_HASHES = "# Sodium11 File Hashes"
+SODIUM11_HEADER_HASHES_ENCRYPTED = "# Sodium11 File Hashes (Encrypted)"
 SODIUM11_HEADER_SIGN = "# Sodium11 Signature"
 ERRASURE_TYPES = [
     "liberasurecode_rs_vand",
@@ -213,11 +215,15 @@ class ChecksumHashes(object):
 
         return filename
 
-    def persist(self, filename, add_postfix=True):
+    def persist(self, filename, add_postfix=True, box=None):
         filename = self._get_persist_filename(filename, add_postfix=add_postfix)
         with open_for_writing(filename) as wf:
-            wf.write("# Sodium11 File Hashes\n")
-            wf.write(self.lines())
+            if box:
+                wf.write(SODIUM11_HEADER_HASHES_ENCRYPTED + "\n")
+                wf.write(box.encrypt(self.lines(), encoder=nacl.encoding.HexEncoder) + "\n")
+            else:
+                wf.write(SODIUM11_HEADER_HASHES + "\n")
+                wf.write(self.lines())
 
     def test_persistfile_exists(self, filename, add_postfix=True):
         filename = self._get_persist_filename(filename, add_postfix=add_postfix)
@@ -757,8 +763,9 @@ def cli_verify(ctx, filename, public_keyfile, progress, leave_progress_bar):
 @click.option('--sender-passphrase', envvar='SODIUM11_SENDER_PASSPHRASE', default=None, help="Sender private key passphrase")
 @click.option('--hash-type', '-t', type=click.Choice(HASH_TYPES.keys()), multiple=True, help="Type of hash algoritm(es) to use. Can be specified multiple times. (Default is SHA1)")
 @click.option('--checksum/--no-checksum', default=False, help='Include generating (unencrypted) checksum of the source file')
+@click.option('--par2/--no-par2', default=False, help='Create par2 archive for .s1x file')
 @click.pass_context
-def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sender_pubkey, verify, keep, progress, sender_key_file, leave_progress_bar, cipher_type, sender_passphrase, hash_type, checksum):
+def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sender_pubkey, verify, keep, progress, sender_key_file, leave_progress_bar, cipher_type, sender_passphrase, hash_type, checksum, par2):
     """Encrypt file(s) with public key."""
 
     if verify and not os.path.isfile(key_file):
@@ -775,6 +782,12 @@ def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sen
 
     if not hash_type:
         hash_type = ('SHA1', )
+
+    if par2:
+        try:
+            subprocess.check_output(['par2', '-V'])
+        except OSError as exc:
+            raise click.UsageError("Par2 %s" % exc)
 
     if progress is None:
         progress = sys.stdout.isatty()
@@ -830,7 +843,7 @@ def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sen
                     wf.write(encrypted_block)
                     pbar.update(block_size)
                 if checksum:
-                    ch.persist(f.name)
+                    ch.persist(f.name, box=box)
 
             cipher_digest = aead_cipher.digest()
             version_and_flags = struct.pack(">II", flags, Version100.version)
@@ -886,6 +899,9 @@ def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sen
                     output_filename=None,
                     ch=ch if checksum else None,
                 )
+
+        if par2:
+            subprocess.check_call(["par2", "c", output_filename])
 
         if not keep:
             os.unlink(f.name)
@@ -978,6 +994,31 @@ def _decrypt(f, ed_prv, sender_pubkey, verify, progress, leave_progress_bar, out
         box = nacl.public.Box(r_prv_curve, s_pub_curve)
         metadata_io = StringIO(box.decrypt(_raw_metadata))
 
+        if output_filename:
+            hash_filename = output_filename + ".s1x"
+            if os.path.isfile(hash_filename) and not ch:
+                with open(hash_filename, "r") as hf:
+                    header_line = hf.readline().strip()
+                    if header_line == SODIUM11_HEADER_HASHES:
+                        lines = hf.read().strip().split("\n")
+                    elif header_line == SODIUM11_HEADER_HASHES_ENCRYPTED:
+                        lines = box.decrypt(hf.read().strip(), encoder=nacl.encoding.HexEncoder).split("\n")
+                    else:
+                        raise click.UsageError("Invalid signature file")
+
+                    hshs = {}
+                    for line in lines:
+                        line = line.strip()
+                        if line:
+                            lh, lf = line.split("  ")
+                            if lf != output_filename:
+                                click.secho("Source file name mismatch '%s' != '%s'" % (lf, output_filename), fg='red')
+                            hash_type, hash_hexdigest = lh.split("=")
+                            if hash_type in hshs:
+                                raise click.UsageError("Error found multiple values for same hash_type")
+                            hshs[hash_type] = hash_hexdigest
+                ch = ChecksumHashes(hash_types=hshs.keys(), filename=output_filename, compare_digests=hshs)
+
         version = int(metadata_io.read(8))
         enc_filesize = unpack_128bit_long(metadata_io.read(16))
         cipher_type = unpack_16bytes(metadata_io.read(17))
@@ -1017,8 +1058,12 @@ def _decrypt(f, ed_prv, sender_pubkey, verify, progress, leave_progress_bar, out
         if cipher_digest != aead_cipher.digest():
             raise click.UsageError("File '%s' failed cipher checksum '%s' != '%s'" % (f.name, cipher_digest, aead_cipher.digest()))
 
-        if not ch.compare():
-            raise click.UsageError("File '%s' failed checksum" % f.name)
+        if ch:
+            if not ch.compare():
+                raise click.UsageError("File '%s' failed checksum" % f.name)
+            else:
+                if 0:
+                    click.secho("checksum checks out", fg="green")
 
 
 # @cli.command(name='encode-rs')
