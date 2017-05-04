@@ -77,6 +77,7 @@ DEFAULT_KEYPATH = os.path.join(CONFIG_DIRECTORY, "id_ed25519")
 DEFAULT_KEYPATH_PUB = DEFAULT_KEYPATH + ".pub"
 BUFSIZE = 1024 * 1024
 SODIUM11_HEADER_HASHES = "# Sodium11 File Hashes"
+SODIUM11_HEADER_SIGN = "# Sodium11 Signature"
 ERRASURE_TYPES = [
     "liberasurecode_rs_vand",
     "jerasure_rs_vand",
@@ -168,11 +169,14 @@ class ChaCha20Blake2bHMAC(object):
 
 
 class ChecksumHashes(object):
-    def __init__(self, hash_types, filename):
+    def __init__(self, hash_types, filename, compare_digests=None):
         self._hash_types = hash_types
         self._filename = filename
         self._hshs = [HASH_TYPES[e]() for e in self._hash_types]
-        self._compare_digests = ["" for e in self._hash_types]
+        if compare_digests:
+            self._compare_digests = [compare_digests[e].decode('hex') for e in self._hash_types]
+        else:
+            self._compare_digests = ["" for e in self._hash_types]
 
     def store_and_reset(self):
         self._compare_digests = [e.digest() for e in self._hshs]
@@ -648,6 +652,96 @@ def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, p
         f.close()
 
 
+@cli.command(name='sign')
+@click.argument('filename', nargs=-1, type=click.File('rb'), required=True)
+@click.option('--key-file', '-k', envvar='SODIUM11_KEY_FILE', default=DEFAULT_KEYPATH, help="Receiver private key file (only needed for verify)")
+@click.option('--passphrase', '-p', envvar='SODIUM11_PASSPHRASE', default=None, help="Receiver private key passphrase")
+@click.option('--hash-type', '-t', type=click.Choice(HASH_TYPES.keys()), multiple=True, help="Type of hash algoritm(es) to use. Can be specified multiple times. (Default is BLAKE2b_512 and SHA1)")
+@click.option('--progress/--no-progress', default=None, help='Show progress indicator')
+@click.option('--leave-progress-bar', default=False, is_flag=True, help="Leave progress bar on terminal")
+@click.pass_context
+def cli_sign(ctx, filename, key_file, passphrase, hash_type, progress, leave_progress_bar):
+    """Sign hashes and current time for file(s)."""
+
+    if not hash_type:
+        hash_type = ('BLAKE2b_512', 'SHA1', )
+
+    if progress is None:
+        progress = sys.stdout.isatty()
+
+    progress_indicator = tqdm if progress else dummy_tqdm
+
+    _s_prv = load_private_keyfile(key_file, passphrase)
+
+    for f in filename:
+        ch = ChecksumHashes(hash_types=hash_type, filename=f.name)
+        with open_for_writing(f.name + ".s1s") as wf:
+            with progress_indicator(total=os.path.getsize(f.name), unit="B", unit_scale=True, desc=shorten_filename(f.name), leave=leave_progress_bar) as pbar:
+                while True:
+                    block = f.read(BUFSIZE)
+                    if not block:
+                        break
+                    ch.update(block)
+                    pbar.update(len(block))
+
+                wf.write(SODIUM11_HEADER_SIGN + "\n")
+                lines = ch.lines()
+            wf.write(_s_prv.sign(lines, encoder=nacl.encoding.HexEncoder))
+            wf.write("\n")
+        f.close()
+
+
+@cli.command(name='verify')
+@click.argument('filename', nargs=-1, type=click.File('rb'), required=True)
+@click.option('--public-keyfile', '-i', envvar='SODIUM11_PUBLIC_KEY', default=DEFAULT_KEYPATH_PUB, help="Receiver public key file")
+@click.option('--progress/--no-progress', default=None, help='Show progress indicator')
+@click.option('--leave-progress-bar', default=False, is_flag=True, help="Leave progress bar on terminal")
+@click.pass_context
+def cli_verify(ctx, filename, public_keyfile, progress, leave_progress_bar):
+    """Verify signature file(s)."""
+
+    if progress is None:
+        progress = sys.stdout.isatty()
+
+    progress_indicator = tqdm if progress else dummy_tqdm
+
+    r_pub = load_public_keyfile(public_keyfile)
+
+    for f in filename:
+        if not f.name.endswith(".s1s"):
+            raise click.UsageError("File does not end with .s1s")
+        source_filename = f.name[:-4]
+        if f.readline().strip() != SODIUM11_HEADER_SIGN:
+            raise click.UsageError("Invalid signature file")
+
+        c = f.readline().strip()
+        lines = r_pub.verify(c, encoder=nacl.encoding.HexEncoder)
+        hshs = {}
+        for line in lines.split("\n"):
+            line = line.strip()
+            if line:
+                lh, lf = line.split("  ")
+                if lf != source_filename:
+                    click.secho("Source file name mismatch '%s' != '%s'" % (lf, source_filename), fg='red')
+                hash_type, hash_hexdigest = lh.split("=")
+                if hash_type in hshs:
+                    raise click.UsageError("Error found multiple values for same hash_type")
+                hshs[hash_type] = hash_hexdigest
+
+        ch = ChecksumHashes(hash_types=hshs.keys(), filename=source_filename, compare_digests=hshs)
+        with open(source_filename, 'r') as sf:
+            with progress_indicator(total=os.path.getsize(source_filename), unit="B", unit_scale=True, desc=shorten_filename(source_filename), leave=leave_progress_bar) as pbar:
+                while True:
+                    block = sf.read(BUFSIZE)
+                    if not block:
+                        break
+                    ch.update(block)
+                    pbar.update(len(block))
+        f.close()
+        if not ch.compare():
+            raise click.UsageError("File '%s' failed checksum" % source_filename)
+
+
 @cli.command(name='encrypt')
 @click.argument('filename', nargs=-1, type=click.File('rb'), required=True)
 @click.option('--public-keyfile', '-i', envvar='SODIUM11_PUBLIC_KEY', default=DEFAULT_KEYPATH_PUB, help="Receiver public key file")
@@ -924,7 +1018,7 @@ def _decrypt(f, ed_prv, sender_pubkey, verify, progress, leave_progress_bar, out
             raise click.UsageError("File '%s' failed cipher checksum '%s' != '%s'" % (f.name, cipher_digest, aead_cipher.digest()))
 
         if not ch.compare():
-            raise click.UsageError("File '%s' failed checksum")
+            raise click.UsageError("File '%s' failed checksum" % f.name)
 
 
 # @cli.command(name='encode-rs')
