@@ -197,7 +197,7 @@ def dummy_for_writing(*args, **kwargs):
 
 def shorten_filename(filename):
     """
-    Shortens a filename
+    Shorten a filename.
 
     >>> shorten_filename("verylongfilename.txt")
     'ver~longfilename.txt'
