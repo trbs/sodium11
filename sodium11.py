@@ -769,7 +769,7 @@ def cli_decrypt(ctx, filename, key_file, passphrase, public_keyfile, verify, kee
             output_filename=output_filename,
         )
         fh.close()
-        if not keep:
+        if verify is False and not keep:
             os.unlink(fh.name)
 
 
