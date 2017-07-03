@@ -3,6 +3,7 @@
 import os
 import sys
 import six
+import codecs
 # import json
 # import time
 import base64
@@ -108,7 +109,7 @@ class BaseVersion(object):
 
     @classmethod
     def version_str(cls):
-        return "%08d" % cls.version
+        return b"%08d" % cls.version
 
 
 class Version100(BaseVersion):
@@ -126,7 +127,7 @@ class Version100(BaseVersion):
     #
     prefix_size = 337
 
-    key_type = "sodium11-ed25519"
+    key_type = b"sodium11-ed25519"
     cipher = "ChaCha20"
     ops_limit = 33554432
     mem_limit = 1073741824
@@ -179,38 +180,39 @@ class ChecksumHashes(object):
     def __init__(self, hash_types, filename, compare_digests=None):
         self._hash_types = hash_types
         self._filename = filename
-        self._hshs = [HASH_TYPES[e]() for e in self._hash_types]
+        self._hshs = {e: HASH_TYPES[e]() for e in self._hash_types}
         if compare_digests:
-            self._compare_digests = [compare_digests[e].decode('hex') for e in self._hash_types]
+            self._compare_digests = {e: codecs.decode(compare_digests[e], 'hex') for e in self._hash_types}
         else:
-            self._compare_digests = ["" for e in self._hash_types]
+            self._compare_digests = {e: "" for e in self._hash_types}
 
     def store_and_reset(self):
-        self._compare_digests = [e.digest() for e in self._hshs]
-        self._hshs = [HASH_TYPES[e]() for e in self._hash_types]
+        self._compare_digests = {e: e.digest() for e in self._hshs}
+        self._hshs = {e: HASH_TYPES[e]() for e in self._hash_types}
 
     def compare(self):
-        digests = [e.digest() for e in self._hshs]
-        if len(digests) != len(self._compare_digests):
+        if self._hshs.keys() != self._compare_digests.keys():
             return False
-        for a, b in zip(digests, self._compare_digests):
-            if a != b:
+
+        for k in self._hshs.keys():
+            if self._hshs[k].digest() != self._compare_digests[k]:
                 return False
+
         return True
 
     def update(self, block):
         for hsh in self._hshs:
-            hsh.update(block)
+            self._hshs[hsh].update(block)
 
     def digest(self):
-        return [(name, hsh.digest()) for name, hsh in zip(self._hash_types, self._hshs)]
+        return {k: v.digest() for k, v in self._hshs.items()}
 
     def hexdigest(self):
-        return [(name, hsh.hexdigest()) for name, hsh in zip(self._hash_types, self._hshs)]
+        return {k: v.hexdigest() for k, v in self._hshs.items()}
 
     def lines(self):
         lines = ""
-        for name, hexdigest in self.hexdigest():
+        for name, hexdigest in self.hexdigest().items():
             lines += "%s=%s  %s\n" % (name, hexdigest, self._filename)
         return lines
 
@@ -337,9 +339,12 @@ def pem_decode(pem_data):
 
 
 @contextmanager
-def open_for_writing(filename, permissions=None):
+def open_for_writing(filename, permissions=None, mode="w", force=False):
     if permissions is None:
         permissions = stat.S_IRUSR | stat.S_IWUSR
+
+    if force and os.path.exists(filename):
+        os.unlink(filename)
 
     umask_original = os.umask(0)
     try:
@@ -348,7 +353,7 @@ def open_for_writing(filename, permissions=None):
         os.umask(umask_original)
 
     # Open file handle and write to file
-    with os.fdopen(fd, 'w') as f:
+    with os.fdopen(fd, mode) as f:
         yield f
 
 
@@ -390,7 +395,7 @@ def save_private_keyfile(private_keyfile, private_key, passphrase):
 
 
 def load_public_keyfile(public_keyfile):
-    with open(public_keyfile, "r") as f:
+    with open(public_keyfile, "rb") as f:
         key_type, pem_data = f.read(1024).split(None)[:2]
 
     pem_data = pem_decode(pem_data)
@@ -401,7 +406,7 @@ def load_public_keyfile(public_keyfile):
 
     pem_key_type, public_key = pem_data[0], pem_data[2]
     if pem_key_type != key_type:
-        raise Sodium11PublicKeyfileError("Key type difference")
+        raise Sodium11PublicKeyfileError("Key type difference, expect '%s' found '%s'" % (key_type, pem_key_type))
 
     return nacl.signing.VerifyKey(public_key)
 
@@ -417,7 +422,7 @@ def load_private_keyfile(private_keyfile, passphrase):
 
     pem_data = pem_decode(lines[1])
     if not pem_data[0] == Version100.key_type:
-        raise Sodium11Error("Invalid Sodium11 private key file version, only key type %s is supported" % Version100.key_type)
+        raise Sodium11Error("Invalid Sodium11 private key file version, only key type %s is supported (found %s)" % (Version100.key_type, pem_data[0]))
     if not pem_data[1] == Version100.version_str():
         raise Sodium11Error("Invalid Sodium11 private key file version, only version %s is supported" % Version100.version_str())
 
@@ -425,7 +430,7 @@ def load_private_keyfile(private_keyfile, passphrase):
 
     key = nacl.pwhash.kdf_scryptsalsa208sha256(
         nacl.secret.SecretBox.KEY_SIZE,
-        bytes(passphrase),
+        passphrase.encode('utf-8'),
         salt,
         opslimit=Version100.ops_limit,
         memlimit=Version100.mem_limit,
@@ -514,6 +519,20 @@ def benchmark_hashtypes(hash_types, bufsize=1024*1024, count=512):
             for i in range(count):
                 hsh.update(block)
                 pbar.update(bufsize)
+
+
+def recursedirs(filename_iter):
+    for filename in filename_iter:
+        if os.path.isdir(filename):
+            for root, dirs, files in os.walk(filename):
+                for fn in files:
+                    fn = os.path.join(root, fn)
+                    if os.path.isfile(fn):
+                        if six.PY2:
+                            fn = fn.decode(sys.getfilesystemencoding())
+                        yield fn
+        else:
+            yield filename
 
 
 @click.group(context_settings={
@@ -651,23 +670,7 @@ def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, p
         progress = sys.stdout.isatty()
     progress_indicator = tqdm if progress else dummy_tqdm
 
-    if recursive:
-        def recursedirs(filename_iter):
-            for filename in filename_iter:
-                if os.path.isdir(filename):
-                    for root, dirs, files in os.walk(filename):
-                        for fn in files:
-                            fn = os.path.join(root, fn)
-                            if os.path.isfile(fn):
-                                if six.PY2:
-                                    fn = fn.decode(sys.getfilesystemencoding())
-                                yield fn
-                else:
-                    yield filename
-
-        filenames = recursedirs(filename)
-    else:
-        filenames = filename
+    filenames = recursedirs(filename) if recursive else filename
 
     for fname in filenames:
         ch = ChecksumHashes(hash_types=hash_type, filename=fname)
@@ -688,14 +691,16 @@ def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, p
 
 
 @cli.command(name='sign')
-@click.argument('filename', nargs=-1, type=click.File('rb'), required=True)
+@click.argument('filename', nargs=-1, type=click.Path(exists=True), required=True)
 @click.option('--key-file', '-k', envvar='SODIUM11_KEY_FILE', default=DEFAULT_KEYPATH, help="Receiver private key file (only needed for verify)")
 @click.option('--passphrase', '-p', envvar='SODIUM11_PASSPHRASE', default=None, help="Receiver private key passphrase")
 @click.option('--hash-type', '-t', type=click.Choice(HASH_TYPES.keys()), multiple=True, help="Type of hash algoritm(es) to use. Can be specified multiple times. (Default is BLAKE2b_512 and SHA1)")
 @click.option('--progress/--no-progress', default=None, help='Show progress indicator')
 @click.option('--leave-progress-bar', default=False, is_flag=True, help="Leave progress bar on terminal")
+@click.option('--force', default=False, is_flag=True, help="Force, overwrites .s1s file if it exists")
+@click.option('--recursive', '-r', default=False, is_flag=True, help="If FILENAME is a directory recursively use all files (not links and special files) within")
 @click.pass_context
-def cli_sign(ctx, filename, key_file, passphrase, hash_type, progress, leave_progress_bar):
+def cli_sign(ctx, filename, key_file, passphrase, hash_type, progress, leave_progress_bar, force, recursive):
     """Sign hashes and current time for file(s)."""
 
     if not hash_type:
@@ -708,10 +713,12 @@ def cli_sign(ctx, filename, key_file, passphrase, hash_type, progress, leave_pro
 
     _s_prv = load_private_keyfile(key_file, passphrase)
 
-    for f in filename:
-        ch = ChecksumHashes(hash_types=hash_type, filename=f.name)
-        with open_for_writing(f.name + ".s1s") as wf:
-            with progress_indicator(total=os.path.getsize(f.name), unit="B", unit_scale=True, desc=shorten_filename(f.name), leave=leave_progress_bar) as pbar:
+    filenames = recursedirs(filename) if recursive else filename
+
+    for fname in filenames:
+        ch = ChecksumHashes(hash_types=hash_type, filename=fname)
+        with open_for_writing(fname + ".s1s", mode="wb", force=force) as wf, open(fname, "rb") as f:
+            with progress_indicator(total=os.path.getsize(fname), unit="B", unit_scale=True, desc=shorten_filename(fname), leave=leave_progress_bar) as pbar:
                 while True:
                     block = f.read(BUFSIZE)
                     if not block:
@@ -719,15 +726,16 @@ def cli_sign(ctx, filename, key_file, passphrase, hash_type, progress, leave_pro
                     ch.update(block)
                     pbar.update(len(block))
 
-                wf.write(SODIUM11_HEADER_SIGN + "\n")
+                wf.write(SODIUM11_HEADER_SIGN.encode('utf-8') + b"\n")
                 lines = ch.lines()
-            wf.write(_s_prv.sign(lines, encoder=nacl.encoding.HexEncoder))
-            wf.write("\n")
+                signed_lines = _s_prv.sign(lines.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
+                wf.write(signed_lines)
+                wf.write(b"\n")
         f.close()
 
 
 @cli.command(name='verify')
-@click.argument('filename', nargs=-1, type=click.File('rb'), required=True)
+@click.argument('filename', nargs=-1, type=click.File('r'), required=True)
 @click.option('--public-keyfile', '-i', envvar='SODIUM11_PUBLIC_KEY', default=DEFAULT_KEYPATH_PUB, help="Receiver public key file")
 @click.option('--progress/--no-progress', default=None, help='Show progress indicator')
 @click.option('--leave-progress-bar', default=False, is_flag=True, help="Leave progress bar on terminal")
@@ -752,13 +760,15 @@ def cli_verify(ctx, filename, public_keyfile, progress, leave_progress_bar):
         c = f.readline().strip()
         lines = r_pub.verify(c, encoder=nacl.encoding.HexEncoder)
         hshs = {}
-        for line in lines.split("\n"):
+        for line in lines.split(b"\n"):
             line = line.strip()
             if line:
-                lh, lf = line.split("  ")
+                lh, lf = line.split(b"  ")
+                lf = lf.decode("utf-8")
                 if lf != source_filename:
                     click.secho("Source file name mismatch '%s' != '%s'" % (lf, source_filename), fg='red')
-                hash_type, hash_hexdigest = lh.split("=")
+                hash_type, hash_hexdigest = lh.split(b"=")
+                hash_type = hash_type.decode("utf-8")
                 if hash_type in hshs:
                     raise click.UsageError("Error found multiple values for same hash_type")
                 hshs[hash_type] = hash_hexdigest
