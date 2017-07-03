@@ -18,7 +18,8 @@ import nacl.pwhash
 import nacl.secret
 import nacl.signing
 import nacl.hash
-from cStringIO import StringIO
+from six.moves import cStringIO as StringIO
+from six.moves import range
 from functools import partial
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -246,7 +247,7 @@ def dummy_tqdm(*args, **kwargs):
 
 
 def dummy_for_writing(*args, **kwargs):
-    class DummyTqdm(object):
+    class DummyWriting(object):
         def __enter__(self):
             return self
 
@@ -256,7 +257,7 @@ def dummy_for_writing(*args, **kwargs):
         def write(self, *args, **kwargs):
             pass
 
-    return DummyTqdm()
+    return DummyWriting()
 
 
 def shorten_filename(filename):
@@ -451,13 +452,18 @@ def devired_key(k, salt=None):
 
 def _get_hash_types():
     hash_types = OrderedDict()
-    if 'md5' in hashlib.algorithms:
+    try:
+        algorithms = hashlib.algorithms_available
+    except AttributeError:
+        algorithms = hashlib.algorithms
+
+    if 'md5' in algorithms:
         hash_types['MD5'] = hashlib.md5
-    if 'sha1' in hashlib.algorithms:
+    if 'sha1' in algorithms:
         hash_types['SHA1'] = hashlib.sha1
-    if 'sha256' in hashlib.algorithms:
+    if 'sha256' in algorithms:
         hash_types['SHA256'] = hashlib.sha256
-    if 'sha512' in hashlib.algorithms:
+    if 'sha512' in algorithms:
         hash_types['SHA512'] = hashlib.sha512
 
     hash_types['BLAKE2b_256'] = partial(BLAKE2b.new, digest_bits=256)
@@ -501,7 +507,7 @@ def benchmark_hashtypes(hash_types, bufsize=1024*1024, count=512):
     for hash_type in hash_types:
         hsh = HASH_TYPES[hash_type]()
         with tqdm(total=bufsize * count, unit="B", unit_scale=True, desc=format_desc % hash_type) as pbar:
-            for i in xrange(count):
+            for i in range(count):
                 hsh.update(block)
                 pbar.update(bufsize)
 
@@ -533,7 +539,7 @@ def cli_generate_key(ctx, key_file, passphrase):
 
     key_file_dir = os.path.dirname(key_file)
     if not os.path.isdir(key_file_dir):
-        os.mkdir(key_file_dir, 0700)
+        os.mkdir(key_file_dir, 0o700)
 
     if not os.access(key_file_dir, os.W_OK):
         raise click.UsageError("Directory '%s' not read and writeable" % key_file_dir)
@@ -1115,7 +1121,7 @@ def _decrypt(f, ed_prv, sender_pubkey, verify, progress, leave_progress_bar, out
 #     for f in filename:
 #         ec = ECDriver(k=k, m=m, ec_type=errasure_type)
 
-#         segment_files = [f.name + ".s11rs.part%d" % (i + 1) for i in xrange(km)]
+#         segment_files = [f.name + ".s11rs.part%d" % (i + 1) for i in range(km)]
 
 #         for segment_file in segment_files:
 #             with open_for_writing(segment_file) as wf:
@@ -1131,7 +1137,7 @@ def _decrypt(f, ed_prv, sender_pubkey, verify, progress, leave_progress_bar, out
 #                     source_hsh.update(block)
 #                 block_size = len(block)
 #                 fragments = ec.encode(block)
-#                 for i in xrange(km):
+#                 for i in range(km):
 #                     wfs[i].write(fragments[i])
 #                 pbar.update(block_size)
 #         for wf in wfs:
@@ -1197,7 +1203,7 @@ def _decrypt(f, ed_prv, sender_pubkey, verify, progress, leave_progress_bar, out
 #         if 's11rs.part' in f:
 #             f = f.split('.s11rs.part', 1)[0]
 #             if f not in filenames:
-#                 for i in xrange(km):
+#                 for i in range(km):
 #                     part_filename = f + ".s11rs.part%d" % (i + 1)
 #                     if not os.path.isfile(part_filename):
 #                         click.secho("%s not found" % part_filename, fg='red')
@@ -1207,7 +1213,7 @@ def _decrypt(f, ed_prv, sender_pubkey, verify, progress, leave_progress_bar, out
 #     for f in filenames:
 #         ec = ECDriver(k=k, m=m, ec_type=errasure_type)
 
-#         segment_files = [f + ".s11rs.part%d" % (i + 1) for i in xrange(km)]
+#         segment_files = [f + ".s11rs.part%d" % (i + 1) for i in range(km)]
 
 #         filesizes = [os.path.getsize(segment_file) for segment_file in segment_files]
 #         if len(set(filesizes)) != 1:

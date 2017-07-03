@@ -1,5 +1,5 @@
-import os
-import sys
+# import os
+# import sys
 from setuptools import setup
 # from ctypes.util import find_library
 
@@ -14,6 +14,7 @@ setup(
     version="0.9.2",
     py_modules=['sodium11'],
     install_requires=[
+        "six>=1.10.0",
         "PyNaCl>=1.1.2",
         "pyyaml>=3.12",
         "click>=6.7",
