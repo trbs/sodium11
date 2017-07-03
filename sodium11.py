@@ -2,6 +2,7 @@
 
 import os
 import sys
+import six
 # import json
 # import time
 import base64
@@ -28,6 +29,39 @@ from Cryptodome.Hash import BLAKE2b, RIPEMD160, SHA3_256, SHA3_512, keccak
 from Cryptodome.Cipher import ChaCha20
 # from Cryptodome.Random import get_random_bytes
 from tqdm import tqdm
+
+__version__ = "0.9.2"
+
+MAX_INT64 = 0xFFFFFFFFFFFFFFFF
+MAX_INT128 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+SECRET_SENDER_PUBLICKEY_MARKER = "deadbeefdeadbeefdeadbeefdeadbeaf"
+CONFIG_DIRECTORY = os.path.expanduser("~/.sodium11")
+DEFAULT_KEYPATH = os.path.join(CONFIG_DIRECTORY, "id_ed25519")
+DEFAULT_KEYPATH_PUB = DEFAULT_KEYPATH + ".pub"
+BUFSIZE = 1024 * 1024
+SODIUM11_HEADER_HASHES = "# Sodium11 File Hashes"
+SODIUM11_HEADER_HASHES_ENCRYPTED = "# Sodium11 File Hashes (Encrypted)"
+SODIUM11_HEADER_SIGN = "# Sodium11 Signature"
+ERRASURE_TYPES = [
+    "liberasurecode_rs_vand",
+    "jerasure_rs_vand",
+    "jerasure_rs_cauchy",
+    # "isa_l_rs_vand",
+    # "isa_l_rs_cauchy",
+]
+HASH_TYPES = {}
+CIPHER_TYPES = {}
+
+# Disable tqdm monitoring thread
+tqdm.monitor_interval = 0
+
+
+class Sodium11Error(Exception):
+    pass
+
+
+class Sodium11PublicKeyfileError(Exception):
+    pass
 
 
 class suppress_stdout_stderr(object):
@@ -68,36 +102,6 @@ class suppress_stdout_stderr(object):
 #         HAS_PYECLIB = True
 #     except ImportError:
 #         HAS_PYECLIB = False
-
-__version__ = "0.9.2"
-
-MAX_INT64 = 0xFFFFFFFFFFFFFFFF
-MAX_INT128 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
-SECRET_SENDER_PUBLICKEY_MARKER = "deadbeefdeadbeefdeadbeefdeadbeaf"
-CONFIG_DIRECTORY = os.path.expanduser("~/.sodium11")
-DEFAULT_KEYPATH = os.path.join(CONFIG_DIRECTORY, "id_ed25519")
-DEFAULT_KEYPATH_PUB = DEFAULT_KEYPATH + ".pub"
-BUFSIZE = 1024 * 1024
-SODIUM11_HEADER_HASHES = "# Sodium11 File Hashes"
-SODIUM11_HEADER_HASHES_ENCRYPTED = "# Sodium11 File Hashes (Encrypted)"
-SODIUM11_HEADER_SIGN = "# Sodium11 Signature"
-ERRASURE_TYPES = [
-    "liberasurecode_rs_vand",
-    "jerasure_rs_vand",
-    "jerasure_rs_cauchy",
-    # "isa_l_rs_vand",
-    # "isa_l_rs_cauchy",
-]
-HASH_TYPES = {}
-CIPHER_TYPES = {}
-
-
-class Sodium11Error(Exception):
-    pass
-
-
-class Sodium11PublicKeyfileError(Exception):
-    pass
 
 
 class BaseVersion(object):
@@ -614,16 +618,17 @@ def cli_verify_hash(ctx, filename, progress, fail_fast, leave_progress_bar):
 
 
 @cli.command(name='hash')
-@click.argument('filename', nargs=-1, type=click.File('rb'), required=True)
+@click.argument('filename', nargs=-1, type=click.Path(exists=True), required=True)
 @click.option('--output-file', '-o', envvar='SODIUM11_OUTPUT_FILE', type=click.File('w'), default=None, help="File to write hash digests")
-@click.option('--persist', '-p', default=False, is_flag=True, help="Persist hash digest to disk, writes .s1x file (not compatible with --output-file)")
+@click.option('--persist', '-p', default=False, is_flag=True, help="Persist hash digest to disk per file, writes .s1x file (not compatible with --output-file)")
 @click.option('--force/--no-force', '-f', default=False, is_flag=True, help="Overwrite the output file if it already exists")
 @click.option('--hash-type', '-t', type=click.Choice(HASH_TYPES.keys()), multiple=True, help="Type of hash algoritm(es) to use. Can be specified multiple times. (Default is SHA1)")
 @click.option('--benchmark', default=False, is_flag=True, help="Benchmark the hash algoritmes")
 @click.option('--progress/--no-progress', default=None, help='Show progress indicator')
 @click.option('--leave-progress-bar', default=False, is_flag=True, help="Leave progress bar on terminal")
+@click.option('--recursive', '-r', default=False, is_flag=True, help="If FILENAME is a directory recursively use all files (not links and special files) within")
 @click.pass_context
-def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, progress, leave_progress_bar):
+def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, progress, leave_progress_bar, recursive):
     """Generate hash for file(s)."""
     if benchmark:
         return benchmark_hashtypes(hash_type)
@@ -646,22 +651,40 @@ def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, p
         progress = sys.stdout.isatty()
     progress_indicator = tqdm if progress else dummy_tqdm
 
-    for f in filename:
-        ch = ChecksumHashes(hash_types=hash_type, filename=f.name)
-        with progress_indicator(total=os.path.getsize(f.name), unit="B", unit_scale=True, desc=shorten_filename(f.name), leave=leave_progress_bar) as pbar:
-            while True:
-                block = f.read(BUFSIZE)
-                if not block:
-                    break
-                ch.update(block)
-                pbar.update(len(block))
+    if recursive:
+        def recursedirs(filename_iter):
+            for filename in filename_iter:
+                if os.path.isdir(filename):
+                    for root, dirs, files in os.walk(filename):
+                        for fn in files:
+                            fn = os.path.join(root, fn)
+                            if os.path.isfile(fn):
+                                if six.PY2:
+                                    fn = fn.decode(sys.getfilesystemencoding())
+                                yield fn
+                else:
+                    yield filename
+
+        filenames = recursedirs(filename)
+    else:
+        filenames = filename
+
+    for fname in filenames:
+        ch = ChecksumHashes(hash_types=hash_type, filename=fname)
+        with progress_indicator(total=os.path.getsize(fname), unit="B", unit_scale=True, desc=shorten_filename(fname), leave=leave_progress_bar) as pbar:
+            with open(fname, 'rb') as f:
+                while True:
+                    block = f.read(BUFSIZE)
+                    if not block:
+                        break
+                    ch.update(block)
+                    pbar.update(len(block))
 
         if persist:
-            ch.persist(f.name, add_postfix=True)
+            ch.persist(fname, add_postfix=True)
         else:
             output_file.write(ch.lines())
             output_file.flush()
-        f.close()
 
 
 @cli.command(name='sign')
@@ -741,7 +764,7 @@ def cli_verify(ctx, filename, public_keyfile, progress, leave_progress_bar):
                 hshs[hash_type] = hash_hexdigest
 
         ch = ChecksumHashes(hash_types=hshs.keys(), filename=source_filename, compare_digests=hshs)
-        with open(source_filename, 'r') as sf:
+        with open(source_filename, 'rb') as sf:
             with progress_indicator(total=os.path.getsize(source_filename), unit="B", unit_scale=True, desc=shorten_filename(source_filename), leave=leave_progress_bar) as pbar:
                 while True:
                     block = sf.read(BUFSIZE)
@@ -894,7 +917,7 @@ def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sen
             if checksum:
                 ch.store_and_reset()
 
-            with open(output_filename, "r") as encrypted_fh:
+            with open(output_filename, "rb") as encrypted_fh:
                 _decrypt(
                     f=encrypted_fh,
                     ed_prv=ed_prv,
