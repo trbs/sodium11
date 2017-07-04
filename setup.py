@@ -22,6 +22,9 @@ setup(
         "colorama>=0.3.7",
         "pycryptodomex>=3.4.5",
     ],
+    tests_require=[
+        "pytest>=3.1.2"
+    ],
     entry_points={
         'console_scripts': [
             'sodium11=sodium11:cli'
