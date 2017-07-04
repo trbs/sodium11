@@ -561,8 +561,12 @@ def cli_generate_key(ctx, key_file, passphrase):
         raise click.UsageError("Passphrase too short")
 
     key_file_dir = os.path.dirname(key_file)
-    if not os.path.isdir(key_file_dir):
+    if key_file_dir and not os.path.isdir(key_file_dir):
         os.mkdir(key_file_dir, 0o700)
+
+    if not key_file_dir:
+        # take currently dir if none was specified
+        key_file_dir = "."
 
     if not os.access(key_file_dir, os.W_OK):
         raise click.UsageError("Directory '%s' not read and writeable" % key_file_dir)
