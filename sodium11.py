@@ -726,7 +726,7 @@ def cli_sign(ctx, filename, key_file, passphrase, hash_type, progress, leave_pro
                     ch.update(block)
                     pbar.update(len(block))
 
-                wf.write(SODIUM11_HEADER_SIGN.encode('utf-8') + b"\n")
+                wf.write(SODIUM11_HEADER_SIGN.encode('ascii') + b"\n")
                 lines = ch.lines()
                 signed_lines = _s_prv.sign(lines.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
                 wf.write(signed_lines)
@@ -768,7 +768,7 @@ def cli_verify(ctx, filename, public_keyfile, progress, leave_progress_bar):
                 if lf != source_filename:
                     click.secho("Source file name mismatch '%s' != '%s'" % (lf, source_filename), fg='red')
                 hash_type, hash_hexdigest = lh.split(b"=")
-                hash_type = hash_type.decode("utf-8")
+                hash_type = hash_type.decode("ascii")
                 if hash_type in hshs:
                     raise click.UsageError("Error found multiple values for same hash_type")
                 hshs[hash_type] = hash_hexdigest
