@@ -521,7 +521,7 @@ def benchmark_hashtypes(hash_types, bufsize=1024*1024, count=512):
                 pbar.update(bufsize)
 
 
-def recursedirs(filename_iter):
+def recursedirs(filename_iter, skip_sodium_files=True):
     for filename in filename_iter:
         if os.path.isdir(filename):
             for root, dirs, files in os.walk(filename):
@@ -530,6 +530,9 @@ def recursedirs(filename_iter):
                     if os.path.isfile(fn):
                         if six.PY2:
                             fn = fn.decode(sys.getfilesystemencoding())
+                        if skip_sodium_files:
+                            if fn.endswith(".s1x") or fn.endswith(".s1s"):
+                                continue
                         yield fn
         else:
             yield filename
