@@ -210,8 +210,9 @@ class ChecksumHashes(object):
     def hexdigest(self):
         return {k: v.hexdigest() for k, v in self._hshs.items()}
 
-    def lines(self):
+    def lines(self, only_basename=False):
         lines = ""
+        filename = os.path.basename(self._filename) if only_basename else self._filename
         for name, hexdigest in self.hexdigest().items():
             lines += "%s=%s  %s\n" % (name, hexdigest, self._filename)
         return lines
@@ -222,15 +223,15 @@ class ChecksumHashes(object):
 
         return filename
 
-    def persist(self, filename, add_postfix=True, box=None):
+    def persist(self, filename, add_postfix=True, box=None, only_basename=False):
         filename = self._get_persist_filename(filename, add_postfix=add_postfix)
         with open_for_writing(filename) as wf:
             if box:
                 wf.write(SODIUM11_HEADER_HASHES_ENCRYPTED + "\n")
-                wf.write(box.encrypt(self.lines(), encoder=nacl.encoding.HexEncoder) + "\n")
+                wf.write(box.encrypt(self.lines(only_basename=only_basename), encoder=nacl.encoding.HexEncoder) + "\n")
             else:
                 wf.write(SODIUM11_HEADER_HASHES + "\n")
-                wf.write(self.lines())
+                wf.write(self.lines(only_basename=only_basename))
 
     def test_persistfile_exists(self, filename, add_postfix=True):
         filename = self._get_persist_filename(filename, add_postfix=add_postfix)
@@ -691,7 +692,7 @@ def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, p
                     pbar.update(len(block))
 
         if persist:
-            ch.persist(fname, add_postfix=True)
+            ch.persist(fname, add_postfix=True, only_basename=True)
         else:
             output_file.write(ch.lines())
             output_file.flush()
