@@ -214,7 +214,7 @@ class ChecksumHashes(object):
         lines = ""
         filename = os.path.basename(self._filename) if only_basename else self._filename
         for name, hexdigest in self.hexdigest().items():
-            lines += "%s=%s  %s\n" % (name, hexdigest, self._filename)
+            lines += "%s=%s  %s\n" % (name, hexdigest, filename)
         return lines
 
     def _get_persist_filename(self, filename, add_postfix=True):
