@@ -319,13 +319,13 @@ unpack_16bytes = partial(unpack_bytes, msg_length=16)
 
 
 def pem_encode(*args):
-    r = ""
+    r = b""
     for a in args:
         if not isinstance(a, bytes):
             raise Sodium11Error("pem_encode value invalid type: %s" % type(a))
         r += struct.pack('>I', len(a))
         r += a
-    return base64.b64encode(r)
+    return base64.b64encode(r).decode('ascii')
 
 
 def pem_decode(pem_data):
@@ -378,7 +378,7 @@ def save_private_keyfile(private_keyfile, private_key, passphrase):
     salt = nacl.utils.random(nacl.pwhash.SCRYPT_SALTBYTES)
     key = nacl.pwhash.kdf_scryptsalsa208sha256(
         nacl.secret.SecretBox.KEY_SIZE,
-        bytes(passphrase),
+        passphrase.encode('utf-8'),
         salt,
         opslimit=Version100.ops_limit,
         memlimit=Version100.mem_limit,
