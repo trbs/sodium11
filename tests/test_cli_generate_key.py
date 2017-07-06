@@ -12,9 +12,10 @@ def _generate_key(filename):
         assert result.exit_code == 0
         with open(filename) as f:
             data = f.read()
-        assert False
         assert '-----BEGIN SODIUM11 PRIVATE KEY-----' in data
         assert '-----END SODIUM11 PRIVATE KEY-----' in data
+        assert os.stat(filename).st_mode & 0o777 == 0o600
+        assert os.stat(filename + ".pub").st_mode & 0o777 == 0o644
 
 
 def test_cli_generate_key_without_directory():
@@ -23,3 +24,15 @@ def test_cli_generate_key_without_directory():
 
 def test_cli_generate_key_with_directory():
     _generate_key("keys/id_ed25519")
+
+
+def test_1(runner):
+    print(runner)
+
+
+def test_2(runner):
+    print(runner)
+
+
+def test_3(runner):
+    print(runner)
