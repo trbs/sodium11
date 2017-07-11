@@ -201,8 +201,8 @@ class ChecksumHashes(object):
         for hash_type in self._hash_types:
             hshs[hash_type] = HASH_TYPES[hash_type]()
         if self._salts:
-            for ht in self._hash_types:
-                hshs[ht].update(self._salts[ht])
+            for ht, salt in self._salts.items():
+                hshs[ht].update(salt)
         return hshs
 
     def store_and_reset(self):
@@ -819,27 +819,45 @@ def cli_verify_sign(ctx, filename, public_keyfile, progress, leave_progress_bar,
         if not f.name.endswith(".s1s"):
             raise click.UsageError("File does not end with .s1s")
         source_filename = f.name[:-4]
-        if f.readline().strip() not in (SODIUM11_HEADER_SIGN_V0, SODIUM11_HEADER_SIGN_V11):
+        header_line = f.readline().strip()
+        if header_line not in (SODIUM11_HEADER_SIGN_V0, SODIUM11_HEADER_SIGN_V11):
             raise click.UsageError("Invalid signature file")
+
+        if header_line == SODIUM11_HEADER_SIGN_V0:
+            use_salts = False
+        else:
+            use_salts = True
 
         c = f.readline().strip()
         lines = r_pub.verify(c, encoder=nacl.encoding.HexEncoder)
 
+        # TODO: unify reading of hash output file code (includes doing proper versioning support and parameters in code)
         hshs = {}
+        salts = {}
         for line in lines.split(b"\n"):
             line = line.strip()
             if line:
-                lh, lf = line.split(b"  ")
+                params, lf = line.split(b"  ", 1)
                 lf = lf.decode("utf-8")
                 if lf != source_filename:
                     click.secho("Source file name mismatch '%s' != '%s'" % (lf, source_filename), fg='red')
-                hash_type, hash_hexdigest = lh.split(b"=")
+                params = params.split(b" ")
+                hash_type, hash_hexdigest = params[0].split(b"=")
                 hash_type = hash_type.decode("ascii")
                 if hash_type in hshs:
                     raise click.UsageError("Error found multiple values for same hash_type")
                 hshs[hash_type] = hash_hexdigest
+                if len(params) == 1 and use_salts:
+                    raise click.UsageError("Error invalid number of parameters")
+                if len(params) != 2 and use_salts:
+                    raise click.UsageError("Error invalid number of parameters")
+                if use_salts:
+                    param_name, param_value = params[1].split(b"=", 1)
+                    if param_name != "SALT":
+                        raise click.UsageError("Error invalid salt parameter")
+                    salts[hash_type] = base64.b64decode(param_value)
 
-        ch = ChecksumHashes(hash_types=hshs.keys(), filename=source_filename, compare_digests=hshs)
+        ch = ChecksumHashes(hash_types=hshs.keys(), filename=source_filename, compare_digests=hshs, salts=salts)
         with open(source_filename, 'rb') as sf:
             with progress_indicator(total=os.path.getsize(source_filename), unit="B", unit_scale=True, desc=shorten_filename(source_filename), leave=leave_progress_bar) as pbar:
                 while True:
