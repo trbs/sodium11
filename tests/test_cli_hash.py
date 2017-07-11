@@ -85,3 +85,13 @@ def test_cli_verify_hash_persistant(runner_factory):
         common_asserts(result)
         result = runner.invoke(cli, ['verify-hash'] + [e + ".s1x" for e in files], catch_exceptions=False)
         common_asserts(result)
+
+
+def test_cli_verify_hash_stdin_with_random_salts(runner_factory):
+    with runner_factory() as runner:
+        files = list(set([e[0] for e in TEST_FILES]))
+        result = runner.invoke(cli, ['hash', "--random-salt", "-t", "MD5", "-t", "SHA1", "-t", "BLAKE2b_512", "-t", "SHA3_512"] + files, catch_exceptions=False)
+        common_asserts(result)
+        assert "SALT=" in result.output
+        result = runner.invoke(cli, ['verify-hash', "-"], input=result.output, catch_exceptions=False)
+        common_asserts(result)

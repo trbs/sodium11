@@ -636,15 +636,29 @@ def cli_verify_hash(ctx, filename, progress, fail_fast, leave_progress_bar):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            h, filename = line.split("  ", 1)
-            hash_name, hash_hexdigest = h.split("=")
+            params, filename = line.split("  ", 1)
+            hash_name = None
+            hash_hexdigest = None
+            hash_salt = None
+            params = params.split(" ")
+            # first param is always the hash type and digest
+            hash_name, hash_hexdigest = params[0].split("=", 1)
+            # only other possiblity params at the moment is the hash salt
+            if len(params) > 1:
+                p_name, p_value = params[1].split("=", 1)
+                if p_name == "SALT":
+                    hash_salt = base64.b64decode(p_value)
+                else:
+                    click.secho("Unknown parameter '%s' skipping line." % p_name, fg='red')
+                    continue
+
             if not os.path.isfile(filename):
                 msg = "File does not exists: %s" % filename
                 if fail_fast:
                     raise click.ClickException(msg)
                 click.secho(msg, fg='red')
                 continue
-            files.append((filename, hash_name, hash_hexdigest))
+            files.append((filename, hash_name, hash_hexdigest, hash_salt))
         f.close()
 
     if progress is None:
@@ -652,8 +666,10 @@ def cli_verify_hash(ctx, filename, progress, fail_fast, leave_progress_bar):
     progress_indicator = tqdm if progress else dummy_tqdm
     failed = ""
 
-    for filename, hash_name, hash_hexdigest in files:
+    for filename, hash_name, hash_hexdigest, hash_salt in files:
         hsh = HASH_TYPES[hash_name]()
+        if hash_salt:
+            hsh.update(hash_salt)
         with progress_indicator(total=os.path.getsize(filename), unit="B", unit_scale=True, desc=shorten_filename(filename), leave=leave_progress_bar) as pbar:
             with open(filename, "r") as f:
                 while True:
