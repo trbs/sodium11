@@ -790,13 +790,13 @@ def cli_sign(ctx, filename, key_file, passphrase, hash_type, progress, leave_pro
         f.close()
 
 
-@cli.command(name='verify')
+@cli.command(name='verify-sign')
 @click.argument('filename', nargs=-1, type=click.File('r'), required=True)
 @click.option('--public-keyfile', '-i', envvar='SODIUM11_PUBLIC_KEY', default=DEFAULT_KEYPATH_PUB, help="Receiver public key file")
 @click.option('--progress/--no-progress', default=None, help='Show progress indicator')
 @click.option('--leave-progress-bar', default=False, is_flag=True, help="Leave progress bar on terminal")
 @click.pass_context
-def cli_verify(ctx, filename, public_keyfile, progress, leave_progress_bar):
+def cli_verify_sign(ctx, filename, public_keyfile, progress, leave_progress_bar):
     """Verify signature file(s)."""
 
     if progress is None:
