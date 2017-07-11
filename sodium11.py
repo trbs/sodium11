@@ -627,9 +627,11 @@ def cli_verify_hash(ctx, filename, progress, fail_fast, leave_progress_bar):
 
     files = []
     for f in filename:
-        if not f.readline().strip() == SODIUM11_HEADER_HASHES:
-            click.secho("%s is not a Sodium11 hash output file" % (f.name, ), fg='red')
-            continue
+        if hasattr(f, 'name'):
+            header_line = f.readline().strip()
+            if header_line not in (SODIUM11_HEADER_HASHES_V0, SODIUM11_HEADER_HASHES_V10):
+                click.secho("%s is not a Sodium11 hash output file" % (f.name, ), fg='red')
+                continue
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
