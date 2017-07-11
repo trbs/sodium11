@@ -37,6 +37,7 @@ def runner_factory(tmpdir_factory):
 
     runner.env['SODIUM11_KEY_FILE'] = keyfile
     runner.env['SODIUM11_PASSPHRASE'] = passphrase
+    runner.env['SODIUM11_PUBLIC_KEY'] = keyfile + ".pub"
 
     # x = isolated_dir.join("keys")
     # os.makedirs(x)
