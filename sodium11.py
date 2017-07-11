@@ -9,6 +9,7 @@ import codecs
 import base64
 import struct
 import hashlib
+import collections
 # import yaml
 import stat
 import click
@@ -40,9 +41,12 @@ CONFIG_DIRECTORY = os.path.expanduser("~/.sodium11")
 DEFAULT_KEYPATH = os.path.join(CONFIG_DIRECTORY, "id_ed25519")
 DEFAULT_KEYPATH_PUB = DEFAULT_KEYPATH + ".pub"
 BUFSIZE = 1024 * 1024
-SODIUM11_HEADER_HASHES = "# Sodium11 File Hashes"
-SODIUM11_HEADER_HASHES_ENCRYPTED = "# Sodium11 File Hashes (Encrypted)"
-SODIUM11_HEADER_SIGN = "# Sodium11 Signature"
+SODIUM11_HEADER_HASHES_V0 = "# Sodium11 File Hashes"
+SODIUM11_HEADER_HASHES_V10 = "# Sodium11 File Hashes v1.0"
+SODIUM11_HEADER_HASHES_ENCRYPTED_V0 = "# Sodium11 File Hashes (Encrypted)"
+SODIUM11_HEADER_HASHES_ENCRYPTED_V10 = "# Sodium11 File Hashes v1.0 (Encrypted)"
+SODIUM11_HEADER_SIGN_V0 = "# Sodium11 Signature"
+SODIUM11_HEADER_SIGN_V11 = "# Sodium11 Signature v1.1"
 ERRASURE_TYPES = [
     "liberasurecode_rs_vand",
     "jerasure_rs_vand",
@@ -177,18 +181,33 @@ class ChaCha20Blake2bHMAC(object):
 
 
 class ChecksumHashes(object):
-    def __init__(self, hash_types, filename, compare_digests=None):
+    def __init__(self, hash_types, filename, compare_digests=None, salts=None, add_random_salt=False):
         self._hash_types = hash_types
         self._filename = filename
-        self._hshs = {e: HASH_TYPES[e]() for e in self._hash_types}
         if compare_digests:
             self._compare_digests = {e: codecs.decode(compare_digests[e], 'hex') for e in self._hash_types}
         else:
             self._compare_digests = {e: "" for e in self._hash_types}
+        self._add_random_salt = add_random_salt
+        self._salts = salts if salts else {}
+        if self._add_random_salt:
+            for ht in self._hash_types:
+                salt = nacl.utils.random(32)
+                self._salts[ht] = salt
+        self._hshs = self._create_empty_hshs()
+
+    def _create_empty_hshs(self):
+        hshs = collections.OrderedDict()
+        for hash_type in self._hash_types:
+            hshs[hash_type] = HASH_TYPES[hash_type]()
+        if self._salts:
+            for ht in self._hash_types:
+                hshs[ht].update(self._salts[ht])
+        return hshs
 
     def store_and_reset(self):
         self._compare_digests = {e: e.digest() for e in self._hshs}
-        self._hshs = {e: HASH_TYPES[e]() for e in self._hash_types}
+        self._hshs = self._create_empty_hshs()
 
     def compare(self):
         if self._hshs.keys() != self._compare_digests.keys():
@@ -205,16 +224,26 @@ class ChecksumHashes(object):
             self._hshs[hsh].update(block)
 
     def digest(self):
-        return {k: v.digest() for k, v in self._hshs.items()}
+        r = collections.OrderedDict()
+        for k, v in self._hshs.items():
+            r[k] = v.digest()
+        return r
 
     def hexdigest(self):
-        return {k: v.hexdigest() for k, v in self._hshs.items()}
+        r = collections.OrderedDict()
+        for k, v in self._hshs.items():
+            r[k] = v.hexdigest()
+        return r
 
     def lines(self, only_basename=False):
         lines = ""
         filename = os.path.basename(self._filename) if only_basename else self._filename
         for name, hexdigest in self.hexdigest().items():
-            lines += "%s=%s  %s\n" % (name, hexdigest, filename)
+            line = "%s=%s" % (name, hexdigest)
+            if self._salts:
+                line += " SALT=%s" % (base64.b64encode(self._salts[name]).decode('ascii'), )
+            line += "  %s" % (filename, )
+            lines += line + "\n"
         return lines
 
     def _get_persist_filename(self, filename, add_postfix=True):
@@ -223,14 +252,14 @@ class ChecksumHashes(object):
 
         return filename
 
-    def persist(self, filename, add_postfix=True, box=None, only_basename=False):
+    def persist(self, filename, add_postfix=True, box=None, only_basename=False, force=False):
         filename = self._get_persist_filename(filename, add_postfix=add_postfix)
-        with open_for_writing(filename) as wf:
+        with open_for_writing(filename, force=force) as wf:
             if box:
-                wf.write(SODIUM11_HEADER_HASHES_ENCRYPTED + "\n")
+                wf.write(SODIUM11_HEADER_HASHES_ENCRYPTED_V10 + "\n")
                 wf.write(box.encrypt(self.lines(only_basename=only_basename), encoder=nacl.encoding.HexEncoder) + "\n")
             else:
-                wf.write(SODIUM11_HEADER_HASHES + "\n")
+                wf.write(SODIUM11_HEADER_HASHES_V10 + "\n")
                 wf.write(self.lines(only_basename=only_basename))
 
     def test_persistfile_exists(self, filename, add_postfix=True):
@@ -654,8 +683,9 @@ def cli_verify_hash(ctx, filename, progress, fail_fast, leave_progress_bar):
 @click.option('--progress/--no-progress', default=None, help='Show progress indicator')
 @click.option('--leave-progress-bar', default=False, is_flag=True, help="Leave progress bar on terminal")
 @click.option('--recursive', '-r', default=False, is_flag=True, help="If FILENAME is a directory recursively use all files (not links and special files) within")
+@click.option('--random-salt', default=False, is_flag=True, help="Add random salt to hashes")
 @click.pass_context
-def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, progress, leave_progress_bar, recursive):
+def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, progress, leave_progress_bar, recursive, random_salt):
     """Generate hash for file(s)."""
     if benchmark:
         return benchmark_hashtypes(hash_type)
@@ -672,7 +702,7 @@ def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, p
     if not output_file:
         output_file = sys.stdout
     else:
-        output_file.write(SODIUM11_HEADER_HASHES + "\n")
+        output_file.write(SODIUM11_HEADER_HASHES_V10 + "\n")
 
     if progress is None:
         progress = sys.stdout.isatty()
@@ -681,7 +711,7 @@ def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, p
     filenames = recursedirs(filename) if recursive else filename
 
     for fname in filenames:
-        ch = ChecksumHashes(hash_types=hash_type, filename=fname)
+        ch = ChecksumHashes(hash_types=hash_type, filename=fname, add_random_salt=random_salt)
         with progress_indicator(total=os.path.getsize(fname), unit="B", unit_scale=True, desc=shorten_filename(fname), leave=leave_progress_bar) as pbar:
             with open(fname, 'rb') as f:
                 while True:
@@ -692,7 +722,7 @@ def cli_hash(ctx, filename, output_file, persist, force, hash_type, benchmark, p
                     pbar.update(len(block))
 
         if persist:
-            ch.persist(fname, add_postfix=True, only_basename=True)
+            ch.persist(fname, add_postfix=True, only_basename=True, force=force)
         else:
             output_file.write(ch.lines())
             output_file.flush()
@@ -724,7 +754,7 @@ def cli_sign(ctx, filename, key_file, passphrase, hash_type, progress, leave_pro
     filenames = recursedirs(filename) if recursive else filename
 
     for fname in filenames:
-        ch = ChecksumHashes(hash_types=hash_type, filename=fname)
+        ch = ChecksumHashes(hash_types=hash_type, filename=fname, add_random_salt=True)
         with open_for_writing(fname + ".s1s", mode="wb", force=force) as wf, open(fname, "rb") as f:
             with progress_indicator(total=os.path.getsize(fname), unit="B", unit_scale=True, desc=shorten_filename(fname), leave=leave_progress_bar) as pbar:
                 while True:
@@ -734,7 +764,7 @@ def cli_sign(ctx, filename, key_file, passphrase, hash_type, progress, leave_pro
                     ch.update(block)
                     pbar.update(len(block))
 
-                wf.write(SODIUM11_HEADER_SIGN.encode('ascii') + b"\n")
+                wf.write(SODIUM11_HEADER_SIGN_V11.encode('ascii') + b"\n")
                 lines = ch.lines()
                 signed_lines = _s_prv.sign(lines.encode('utf-8'), encoder=nacl.encoding.HexEncoder)
                 wf.write(signed_lines)
