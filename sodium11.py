@@ -625,12 +625,14 @@ def cli_generate_key(ctx, key_file, passphrase):
 def cli_verify_hash(ctx, filename, progress, fail_fast, leave_progress_bar):
     """Verify hash for file(s)."""
 
+    failed = False
     files = []
     for f in filename:
         if hasattr(f, 'name'):
             header_line = f.readline().strip()
             if header_line not in (SODIUM11_HEADER_HASHES_V0, SODIUM11_HEADER_HASHES_V10):
                 click.secho("%s is not a Sodium11 hash output file" % (f.name, ), fg='red')
+                failed = True
                 continue
         for line in f:
             line = line.strip()
@@ -664,7 +666,6 @@ def cli_verify_hash(ctx, filename, progress, fail_fast, leave_progress_bar):
     if progress is None:
         progress = sys.stdout.isatty()
     progress_indicator = tqdm if progress else dummy_tqdm
-    failed = ""
 
     for filename, hash_name, hash_hexdigest, hash_salt in files:
         hsh = HASH_TYPES[hash_name]()
@@ -795,8 +796,9 @@ def cli_sign(ctx, filename, key_file, passphrase, hash_type, progress, leave_pro
 @click.option('--public-keyfile', '-i', envvar='SODIUM11_PUBLIC_KEY', default=DEFAULT_KEYPATH_PUB, help="Receiver public key file")
 @click.option('--progress/--no-progress', default=None, help='Show progress indicator')
 @click.option('--leave-progress-bar', default=False, is_flag=True, help="Leave progress bar on terminal")
+@click.option('--fail-fast', '-f', default=False, is_flag=True, help="Fail command directly when error is detected")
 @click.pass_context
-def cli_verify_sign(ctx, filename, public_keyfile, progress, leave_progress_bar):
+def cli_verify_sign(ctx, filename, public_keyfile, progress, leave_progress_bar, fail_fast):
     """Verify signature file(s)."""
 
     if progress is None:
@@ -804,6 +806,7 @@ def cli_verify_sign(ctx, filename, public_keyfile, progress, leave_progress_bar)
 
     progress_indicator = tqdm if progress else dummy_tqdm
 
+    failed = False
     r_pub = load_public_keyfile(public_keyfile)
 
     for f in filename:
@@ -840,7 +843,16 @@ def cli_verify_sign(ctx, filename, public_keyfile, progress, leave_progress_bar)
                     pbar.update(len(block))
         f.close()
         if not ch.compare():
-            raise click.UsageError("File '%s' failed checksum" % source_filename)
+            msg = "FAILED: %s" % (source_filename, )
+            failed = True
+            if fail_fast:
+                raise click.ClickException(msg)
+            else:
+                click.secho(msg, fg='red')
+        else:
+            click.secho("OK: %s" % (source_filename, ), fg='green')
+    if failed:
+        raise click.ClickException("(Some) files failed to verify the hash")
 
 
 @cli.command(name='encrypt')
