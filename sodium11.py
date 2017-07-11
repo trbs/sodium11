@@ -766,6 +766,12 @@ def cli_sign(ctx, filename, key_file, passphrase, hash_type, progress, leave_pro
     if progress is None:
         progress = sys.stdout.isatty()
 
+    if passphrase is None:
+        if progress:
+            passphrase = click.prompt('Passphrase', hide_input=True)
+        else:
+            raise click.ClickException("No passphrase given.")
+
     progress_indicator = tqdm if progress else dummy_tqdm
 
     _s_prv = load_private_keyfile(key_file, passphrase)
@@ -818,6 +824,7 @@ def cli_verify_sign(ctx, filename, public_keyfile, progress, leave_progress_bar,
 
         c = f.readline().strip()
         lines = r_pub.verify(c, encoder=nacl.encoding.HexEncoder)
+
         hshs = {}
         for line in lines.split(b"\n"):
             line = line.strip()
@@ -1026,14 +1033,20 @@ def cli_encrypt(ctx, filename, public_keyfile, key_file, passphrase, include_sen
 @click.pass_context
 def cli_decrypt(ctx, filename, key_file, passphrase, public_keyfile, verify, keep, progress, leave_progress_bar):
     """Decrypt file(s) with private key."""
+    if progress is None:
+        progress = sys.stdout.isatty()
+
+    if passphrase is None:
+        if progress:
+            passphrase = click.prompt('Passphrase', hide_input=True)
+        else:
+            raise click.ClickException("No passphrase given.")
+
     ed_prv = load_private_keyfile(key_file, passphrase)
 
     sender_pubkey = None
     if public_keyfile:
         sender_pubkey = load_public_keyfile(public_keyfile)
-
-    if progress is None:
-        progress = sys.stdout.isatty()
 
     for fh in filename:
         if not fh.name.endswith(".s11"):
