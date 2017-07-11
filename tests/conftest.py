@@ -2,9 +2,8 @@ import os
 import six
 import pytest
 import string
-# import random
 from click.testing import CliRunner
-# from sodium11 import cli
+from Cryptodome.Cipher import AES
 
 
 TEST_PRIVATE_KEY = """-----BEGIN SODIUM11 PRIVATE KEY-----
@@ -54,24 +53,19 @@ def runner_factory(tmpdir_factory):
         write_data_size(f, size_mb=16, data="0")
 
     # create test file zeros 64MB
-    with isolated_dir.join("zeros_64MB.dat").open(mode="w") as f:
-        write_data_size(f, size_mb=64, data="0")
+    with isolated_dir.join("zeros_32MB.dat").open(mode="w") as f:
+        write_data_size(f, size_mb=32, data="0")
 
     # create test file printable characters 64MB
-    with isolated_dir.join("repeat_64MB.dat").open(mode="w") as f:
-        write_data_size(f, size_mb=64, data=string.printable)
+    with isolated_dir.join("repeat_16MB.dat").open(mode="w") as f:
+        write_data_size(f, size_mb=16, data=string.printable)
 
-    # # create predictable "random" file
-    # rnd = random.Random()
-    # rnd.seed(9876)
-    # with open("predictable_1MB.dat", "w") as f:
-    #     for i in six.moves.range(1 * 1024 * 1024):
-    #         f.write(rnd.choice(string.printable))
-
-    # # create a random file
-    # with open("random_16MB.dat", "wb") as f:
-    #     for i in six.moves.range(16 * 1024):
-    #         f.write(os.urandom(1024))
+    # create predictable "random" file
+    cipher = AES.new('1234567890123456', AES.MODE_CFB, iv='1234567890123456')
+    with isolated_dir.join("bin_1MB.dat").open(mode="wb") as f:
+        block = b'0'*1024
+        for i in six.moves.range(1 * 1024):
+            f.write(cipher.encrypt(block))
 
     class RunnerFactory(object):
         def __init__(self, runner):
