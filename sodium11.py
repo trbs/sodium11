@@ -810,7 +810,7 @@ def cli_verify_sign(ctx, filename, public_keyfile, progress, leave_progress_bar)
         if not f.name.endswith(".s1s"):
             raise click.UsageError("File does not end with .s1s")
         source_filename = f.name[:-4]
-        if f.readline().strip() != SODIUM11_HEADER_SIGN:
+        if f.readline().strip() not in (SODIUM11_HEADER_SIGN_V0, SODIUM11_HEADER_SIGN_V11):
             raise click.UsageError("Invalid signature file")
 
         c = f.readline().strip()
@@ -1094,9 +1094,9 @@ def _decrypt(f, ed_prv, sender_pubkey, verify, progress, leave_progress_bar, out
             if os.path.isfile(hash_filename) and not ch:
                 with open(hash_filename, "r") as hf:
                     header_line = hf.readline().strip()
-                    if header_line == SODIUM11_HEADER_HASHES:
+                    if header_line in (SODIUM11_HEADER_HASHES_V0, SODIUM11_HEADER_HASHES_V10):
                         lines = hf.read().strip().split("\n")
-                    elif header_line == SODIUM11_HEADER_HASHES_ENCRYPTED:
+                    elif header_line in (SODIUM11_HEADER_HASHES_ENCRYPTED_V0, SODIUM11_HEADER_HASHES_ENCRYPTED_V10):
                         lines = box.decrypt(hf.read().strip(), encoder=nacl.encoding.HexEncoder).split("\n")
                     else:
                         raise click.UsageError("Invalid signature file")
