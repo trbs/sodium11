@@ -85,5 +85,3 @@ def test_cli_verify_hash_persistant(runner_factory):
         common_asserts(result)
         result = runner.invoke(cli, ['verify-hash'] + [e + ".s1x" for e in files], catch_exceptions=False)
         common_asserts(result)
-
-
