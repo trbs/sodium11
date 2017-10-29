@@ -362,8 +362,8 @@ def pem_decode(pem_data):
     pem_data = base64.b64decode(pem_data)
     parts = []
     while pem_data:
-        l = struct.unpack('>I', pem_data[:4])[0] + 4
-        d, pem_data = pem_data[4:l], pem_data[l:]
+        dl = struct.unpack('>I', pem_data[:4])[0] + 4
+        d, pem_data = pem_data[4:dl], pem_data[dl:]
         parts.append(d)
     return parts
 
@@ -540,8 +540,7 @@ def benchmark_hashtypes(hash_types, bufsize=1024*1024, count=512):
     if not hash_types:
         hash_types = HASH_TYPES.keys()
 
-    l = max(len(e) for e in hash_types)
-    format_desc = "%%%ds" % l
+    format_desc = "%%%ds" % max(len(e) for e in hash_types)
 
     for hash_type in hash_types:
         hsh = HASH_TYPES[hash_type]()
